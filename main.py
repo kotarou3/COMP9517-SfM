@@ -3,6 +3,8 @@
 import cv2
 import numpy as np
 import glob
+import os
+import tempfile
 
 def calibrateCamera(imagePaths, shape):
     """Calculates intrinsic camera matrix from a chessboard pattern.
@@ -125,6 +127,9 @@ def findProjectionMatrices(keypoints, matches, intrinsicMatrix):
     assert(len(keypoints) == len(matches) + 1)
     
     matrices = []
+    prevRotation = np.identity(3)
+    prevTranslation = np.zeros((3, 1))
+    matrices.append(intrinsicMatrix @ np.hstack((prevRotation, prevTranslation)))
     for i, match in enumerate(matches):
         # Find the essential matrix
         pointsA = np.array([keypoints[i][m.queryIdx].pt for m in match])
@@ -154,23 +159,63 @@ def findProjectionMatrices(keypoints, matches, intrinsicMatrix):
         matches[i] = inlierMatches
         
         # Compute the projection matrix
-        matrices.append(intrinsicMatrix @ np.hstack((rotation, translation)))
+        prevRotation = rotation @ prevRotation
+        prevTranslation = translation + prevTranslation
+        matrices.append(intrinsicMatrix @ np.hstack((prevRotation, prevTranslation)))
 
     return matrices
+
+def computePointCloud(imageNames, projectionMatrices):
+    assert(len(imageNames) == len(projectionMatrices))
+    with tempfile.TemporaryDirectory() as tempdir:
+        os.mkdir(os.path.join(tempdir, "visualize"))
+        os.mkdir(os.path.join(tempdir, "txt"))
+        os.mkdir(os.path.join(tempdir, "models"))
+        for i, (image, matrix) in enumerate(zip(imageNames, projectionMatrices)):
+            imageExt = os.path.splitext(image)[1]
+            assert(imageExt == ".jpg" or imageExt == ".ppm")
+            destImage = "{:08d}{}".format(i, imageExt)
+            os.symlink(os.path.abspath(image), os.path.join(tempdir, "visualize", destImage))
+
+            destMatrix = "{:08d}.txt".format(i)
+            with open(os.path.join(tempdir, "txt", destMatrix), "w") as destMatrixFile:
+                destMatrixFile.write(
+                    "CONTOUR\n"
+                    "{P[0][0]} {P[0][1]} {P[0][2]} {P[0][3]}\n"
+                    "{P[1][0]} {P[1][1]} {P[1][2]} {P[1][3]}\n"
+                    "{P[2][0]} {P[2][1]} {P[2][2]} {P[2][3]}\n"
+                    .format(P = matrix)
+                )
+
+        with open(os.path.join(tempdir, "options.txt"), "w") as optionsFile:
+            optionsFile.write(
+                "timages -1 0 {}\n".format(len(imageNames)) +
+                "oimages 0\n" +
+                "minImageNum 2\n"
+            )
+
+        retval = os.spawnve(
+            os.P_WAIT,
+            os.path.join("pmvs2", "pmvs2"),
+            ["pmvs2", os.path.join(tempdir, ""), "options.txt"],
+            {"LD_LIBRARY_PATH": "pmvs2"}
+        )
+        assert(retval == 0)
+
+        with open(os.path.join(tempdir, "models", "options.txt.ply"), "r") as plyFile:
+            return plyFile.read()
 
 intrinsicMatrix = calibrateCamera(glob.glob("pixel-calibration-downscaled/*.jpg"), (10, 7))
 print("Found intrinsic camera matrix:")
 print(intrinsicMatrix)
 
-images = [cv2.imread("monitor-downscaled/IMG_20180503_144813.jpg"), cv2.imread("monitor-downscaled/IMG_20180503_144817.jpg")]
+imageNames = ["monitor-downscaled/IMG_20180503_144813.jpg", "monitor-downscaled/IMG_20180503_144817.jpg"]
+images = [cv2.imread(i) for i in imageNames]
 keypoints, matches = trackFeatures(images)
 matrices = findProjectionMatrices(keypoints, matches, intrinsicMatrix)
 print("Found projection matrices:")
 print(matrices)
 
-cameraA = np.hstack((intrinsicMatrix, np.mat([0, 0, 0]).T))
-pointsA = np.array([keypoints[0][m.queryIdx].pt for m in matches[0]])
-pointsB = np.array([keypoints[1][m.trainIdx].pt for m in matches[0]])
-pointCloud = cv2.triangulatePoints(cameraA, matrices[0], pointsA.transpose(), pointsB.transpose()).transpose()
-pointCloud = cv2.convertPointsFromHomogeneous(pointCloud).reshape(-1, 3)
-print(pointCloud)
+pointCloud = computePointCloud(imageNames, matrices)
+with open("output.ply", "w") as outputFile:
+    outputFile.write(pointCloud)
