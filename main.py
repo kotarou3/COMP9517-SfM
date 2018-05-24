@@ -126,9 +126,13 @@ def findProjectionMatrices(keypoints, matches, intrinsicMatrix):
 
     assert(len(keypoints) == len(matches) + 1)
 
+    rotations = []
+    translations = []
     matrices = []
     prevRotation = np.identity(3)
     prevTranslation = np.zeros((3, 1))
+    rotations.append(prevRotation)
+    translations.append(prevTranslation)
     matrices.append(intrinsicMatrix @ np.hstack((prevRotation, prevTranslation)))
     for i, match in enumerate(matches):
         # Find the essential matrix
@@ -161,21 +165,27 @@ def findProjectionMatrices(keypoints, matches, intrinsicMatrix):
         # Compute the projection matrix
         prevRotation = rotation @ prevRotation
         prevTranslation = translation + prevTranslation
+        rotations.append(prevRotation)
+        translations.append(prevTranslation)
         matrices.append(intrinsicMatrix @ np.hstack((prevRotation, prevTranslation)))
 
-    return matrices
+    return matrices, rotations, translations
 
-def computePointCloud(imageNames, projectionMatrices):
-    assert(len(imageNames) == len(projectionMatrices))
+def computePointCloud(images, projectionMatrices):
+    assert(len(images) == len(projectionMatrices))
     with tempfile.TemporaryDirectory() as tempdir:
         os.mkdir(os.path.join(tempdir, "visualize"))
         os.mkdir(os.path.join(tempdir, "txt"))
         os.mkdir(os.path.join(tempdir, "models"))
-        for i, (image, matrix) in enumerate(zip(imageNames, projectionMatrices)):
-            imageExt = os.path.splitext(image)[1]
-            assert(imageExt == ".jpg" or imageExt == ".ppm")
-            destImage = "{:08d}{}".format(i, imageExt)
-            os.symlink(os.path.abspath(image), os.path.join(tempdir, "visualize", destImage))
+        for i, (image, matrix) in enumerate(zip(images, projectionMatrices)):
+            if type(image) == str:
+                imageExt = os.path.splitext(image)[1]
+                assert(imageExt == ".jpg" or imageExt == ".ppm")
+                destImage = "{:08d}{}".format(i, imageExt)
+                os.symlink(os.path.abspath(image), os.path.join(tempdir, "visualize", destImage))
+            else:
+                destImage = os.path.join(tempdir, "visualize", "{:08d}.jpg".format(i))
+                cv2.imwrite(destImage, image)
 
             destMatrix = "{:08d}.txt".format(i)
             with open(os.path.join(tempdir, "txt", destMatrix), "w") as destMatrixFile:
@@ -189,7 +199,7 @@ def computePointCloud(imageNames, projectionMatrices):
 
         with open(os.path.join(tempdir, "options.txt"), "w") as optionsFile:
             optionsFile.write(
-                "timages -1 0 {}\n".format(len(imageNames)) +
+                "timages -1 0 {}\n".format(len(images)) +
                 "oimages 0\n" +
                 "minImageNum 2\n"
             )
@@ -200,22 +210,42 @@ def computePointCloud(imageNames, projectionMatrices):
             ["pmvs2", os.path.join(tempdir, ""), "options.txt"],
             {"LD_LIBRARY_PATH": "pmvs2"}
         )
+        #import sys
+        #sys.stdin.readline()
         assert(retval == 0)
 
         with open(os.path.join(tempdir, "models", "options.txt.ply"), "r") as plyFile:
             return plyFile.read()
 
-intrinsicMatrix = calibrateCamera(glob.glob("pixel-calibration-downscaled/*.jpg"), (10, 7))
+"""intrinsicMatrix = calibrateCamera(glob.glob("pixel-calibration-downscaled/*.jpg"), (10, 7))
 print("Found intrinsic camera matrix:")
-print(intrinsicMatrix)
+print(intrinsicMatrix)"""
 
-imageNames = ["monitor-downscaled/IMG_20180503_144813.jpg", "monitor-downscaled/IMG_20180503_144817.jpg"]
+"""imageNames = ["monitor-downscaled/IMG_20180503_144813.jpg", "monitor-downscaled/IMG_20180503_144817.jpg"]
 images = [cv2.imread(i) for i in imageNames]
 keypoints, matches = trackFeatures(images)
-matrices = findProjectionMatrices(keypoints, matches, intrinsicMatrix)
+matrices, rotations, translations = findProjectionMatrices(keypoints, matches, intrinsicMatrix)
 print("Found projection matrices:")
-print(matrices)
+print(matrices)"""
 
-pointCloud = computePointCloud(imageNames, matrices)
+"""imageNames = sorted(glob.glob("temple-test/*.png"))
+images = [cv2.imread(i) for i in imageNames]
+params = np.loadtxt("temple-test/templeSR_par.txt", skiprows = 1, usecols = range(1, 22))
+intrinsicMatrices = params[:, :9].reshape(-1, 3, 3)
+rotations = params[:, 9:18].reshape(-1, 3, 3)
+translations = params[:, 18:].reshape(-1, 3, 1)
+matrices = [K @ np.hstack((R, t)) for K, R, t in zip(intrinsicMatrices, rotations, translations)]"""
+
+params = np.loadtxt("temple-test/templeSR_par.txt", skiprows = 1, usecols = range(1, 22))
+intrinsicMatrix = params[:, :9].reshape(-1, 3, 3)[0]
+
+imageNames = sorted(glob.glob("temple-test/*.png"))
+images = [cv2.imread(i) for i in imageNames]
+keypoints, matches = trackFeatures(images)
+matrices, rotations, translations = findProjectionMatrices(keypoints, matches, intrinsicMatrix)
+print("Found translations:")
+print(repr(np.array(translations).reshape(-1, 3)))
+
+pointCloud = computePointCloud(images, matrices)
 with open("output.ply", "w") as outputFile:
     outputFile.write(pointCloud)
