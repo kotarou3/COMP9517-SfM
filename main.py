@@ -113,6 +113,9 @@ def trackFeatures(images):
 
     return keypoints, matches
 
+def drawMatches(images, keypoints, matches, n, filename):
+    cv2.imwrite(filename, cv2.drawMatches(images[n], keypoints[n], images[n + 1], keypoints[n + 1], matches[n], None))
+
 def findProjectionMatrices(keypoints, matches, intrinsicMatrix):
     """Finds the projection matrix for each camera relative to the first camera.
 
@@ -121,7 +124,7 @@ def findProjectionMatrices(keypoints, matches, intrinsicMatrix):
     intrinsicMatrix = Shared intrinsic camera matrix of all the cameras
 
     Updates the matches to only include inliers, and returns the 4x3 projection
-    matrices.
+    matrices, camera rotations, and translations.
     """
 
     assert(len(keypoints) == len(matches) + 1)
@@ -141,19 +144,20 @@ def findProjectionMatrices(keypoints, matches, intrinsicMatrix):
         essentialMatrix, mask = cv2.findEssentialMat(pointsA, pointsB, intrinsicMatrix)
 
         # If #inliers < 50% of matching points, probably wasn't a good matrix
-        #print(mask)
-        #assert(np.count_nonzero(mask) >= 0.5 * len(match))
+        inliers = np.count_nonzero(mask)
+        if inliers < 0.5 * len(match):
+            print(
+                "Warning: {} <-> {} only has {}/{} ({:.1f}%) inliers".format(
+                    i, i + 1,
+                    inliers, len(match),
+                    inliers / len(match) * 100)
+            )
 
-        # Recover the relative rotation and translation of the cameras.
-        # recoverPose() gives the relative transformation of camera B from A.
+        # Recover the relative rotation and translation of the cameras
         _, rotation, translation, _ = cv2.recoverPose(
             essentialMatrix, pointsA, pointsB,
             intrinsicMatrix, mask = mask
         )
-
-        # Invert the transforms so we get the transformation from camera A to B
-        rotation = np.linalg.inv(rotation)
-        translation = -translation
 
         # Update the matches to only include inliers
         inlierMatches = []
@@ -210,8 +214,6 @@ def computePointCloud(images, projectionMatrices):
             ["pmvs2", os.path.join(tempdir, ""), "options.txt"],
             {"LD_LIBRARY_PATH": "pmvs2"}
         )
-        #import sys
-        #sys.stdin.readline()
         assert(retval == 0)
 
         with open(os.path.join(tempdir, "models", "options.txt.ply"), "r") as plyFile:
@@ -219,11 +221,12 @@ def computePointCloud(images, projectionMatrices):
 
 """intrinsicMatrix = calibrateCamera(glob.glob("pixel-calibration-downscaled/*.jpg"), (10, 7))
 print("Found intrinsic camera matrix:")
-print(intrinsicMatrix)"""
+print(intrinsicMatrix)
 
-"""imageNames = ["monitor-downscaled/IMG_20180503_144813.jpg", "monitor-downscaled/IMG_20180503_144817.jpg"]
+imageNames = ["monitor-downscaled/IMG_20180503_144813.jpg", "monitor-downscaled/IMG_20180503_144817.jpg"]
 images = [cv2.imread(i) for i in imageNames]
 keypoints, matches = trackFeatures(images)
+
 matrices, rotations, translations = findProjectionMatrices(keypoints, matches, intrinsicMatrix)
 print("Found projection matrices:")
 print(matrices)"""
@@ -239,7 +242,7 @@ matrices = [K @ np.hstack((R, t)) for K, R, t in zip(intrinsicMatrices, rotation
 params = np.loadtxt("temple-test/templeSR_par.txt", skiprows = 1, usecols = range(1, 22))
 intrinsicMatrix = params[:, :9].reshape(-1, 3, 3)[0]
 
-imageNames = sorted(glob.glob("temple-test/*.png"))
+imageNames = sorted(glob.glob("temple-test/*.png"))[5:12]
 images = [cv2.imread(i) for i in imageNames]
 keypoints, matches = trackFeatures(images)
 matrices, rotations, translations = findProjectionMatrices(keypoints, matches, intrinsicMatrix)
