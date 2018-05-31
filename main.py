@@ -5,6 +5,8 @@ import numpy as np
 import glob
 import os
 import tempfile
+from copy import deepcopy
+import math
 
 def calibrateCamera(imagePaths, shape):
     """Calculates intrinsic camera matrix from a chessboard pattern.
@@ -246,9 +248,48 @@ imageNames = sorted(glob.glob("temple-test/*.png"))[5:12]
 images = [cv2.imread(i) for i in imageNames]
 keypoints, matches = trackFeatures(images)
 matrices, rotations, translations = findProjectionMatrices(keypoints, matches, intrinsicMatrix)
+
 print("Found translations:")
 print(repr(np.array(translations).reshape(-1, 3)))
 
 pointCloud = computePointCloud(images, matrices)
+
 with open("output.ply", "w") as outputFile:
     outputFile.write(pointCloud)
+
+back_projected_points_collection = []
+
+pointCloud_coords = [list(map(float, line.split()[:3])) for line in pointCloud.splitlines()[13:]]
+pointCloud_colors = [list(map(int, line.split()[-3:])) for line in pointCloud.splitlines()[13:]]
+
+for proj_matrix in matrices:
+    curr_back_projected_points = []
+    for world_point in pointCloud_coords:
+        world_point = deepcopy(world_point)
+        world_point.append(1)
+        image_point = np.matmul(proj_matrix, world_point)
+        image_point = [int(image_point[0]/image_point[2]),int(image_point[1]/image_point[2])]
+        curr_back_projected_points.append(image_point)
+    back_projected_points_collection.append(curr_back_projected_points)
+
+
+color_distances = []
+
+for idx, image in enumerate(images):
+    length = len(image)
+    width = len(image[0])
+
+    back_projected_points = back_projected_points_collection[idx]
+
+    for point_idx, point in enumerate(back_projected_points):
+        x = point[0]
+        y = point[1]
+        if 0 <= x < width and 0 <= y < length:
+            new_color = list(deepcopy(image[y][x]))
+            original_color = deepcopy(pointCloud_colors[point_idx])
+            distance = math.sqrt(sum([(a - b) ** 2 for a, b in zip(new_color, original_color)]))
+            color_distances.append(distance)
+
+if len(color_distances) > 0:
+    average_color_distance = sum(color_distances)/len(color_distances)
+    print("Average color distance is: ", average_color_distance)
