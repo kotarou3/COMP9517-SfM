@@ -1,6 +1,6 @@
 main.py must be run using python3 i.e python3 main.py
 
-Assumes directory structure as seen in zip file
+Assumes images exist in directory structure as seen in zip file
 
 Cloud compare software is required to open ply output files
 
